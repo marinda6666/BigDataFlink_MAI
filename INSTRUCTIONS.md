@@ -1,6 +1,5 @@
 # Инструкция по запуску
 
-Требования: установлен Docker и Docker Compose.
 
 ## 1) Сборка и запуск
 
@@ -35,11 +34,11 @@ docker-compose exec postgres psql -U user -d snowflake_db -c "SELECT * FROM fact
 
 ## Порты
 
-| Сервис | Порт на хосте | Описание |
-|--------|---------------|----------|
-| Kafka | 9093 | брокер (PLAINTEXT на `localhost:9093`) |
-| PostgreSQL | 5443 | база `snowflake_db` (в контейнере 5432) |
-| Flink UI | 8082 | web UI Flink |
+| Сервис | Порт на хосте | 
+|--------|---------------|
+| Kafka | 9093 |
+| PostgreSQL | 5443 | 
+| Flink UI | 8082 | 
 
 ## Остановка
 
