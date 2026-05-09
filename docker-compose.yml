@@ -1,0 +1,141 @@
+name: bigdata-flink-lab3
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: snowflake_db
+    ports:
+      - "5443:5432"
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d snowflake_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - labnet
+
+  kafka:
+    image: apache/kafka:3.7.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    ports:
+      - "9093:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 4s
+      timeout: 10s
+      retries: 30
+      start_period: 50s
+    networks:
+      - labnet
+
+  jobmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    image: bigdata-flink-lab3:flink-python
+    hostname: jobmanager
+    ports:
+      - "8082:8081"
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        state.backend.type: hashmap
+        execution.checkpointing.interval: 60000
+    networks:
+      - labnet
+
+  taskmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    image: bigdata-flink-lab3:flink-python
+    depends_on:
+      - jobmanager
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    networks:
+      - labnet
+
+  kafka-producer:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./kafka-producer:/app
+      - ./исходные данные:/data:ro
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: sales_topic
+      CSV_DIR: /data
+      KAFKA_CONNECT_MAX_ATTEMPTS: "90"
+      PRODUCER_SLEEP_SEC: "0"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        pip install --no-cache-dir -q kafka-python==2.3.1 &&
+        python /app/csv_to_kafka.py
+    networks:
+      - labnet
+
+  flink-star-job:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    image: bigdata-flink-lab3:flink-python
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      jobmanager:
+        condition: service_started
+      taskmanager:
+        condition: service_started
+      kafka-producer:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: sales_topic
+      KAFKA_GROUP_ID: flink-lab3-star
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: snowflake_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - ./pyflink-job:/opt/flink/usrlib:ro
+    command:
+      - bash
+      - -c
+      - |
+        sleep 15
+        exec flink run -py /opt/flink/usrlib/sales_star_job.py -m jobmanager:8081 -d
+    networks:
+      - labnet
+
+networks:
+  labnet:
+    driver: bridge
